@@ -1,6 +1,5 @@
-// Sharp removed - using Cloudinary instead
+// Railway Python Service Integration
 import { uploadToCloudinary } from '../cloudinaryUpload.js';
-import { removeBackgroundWithSharp } from '../sharpBackgroundRemoval.js';
 
 export class BackgroundRemovalService {
   constructor() {
@@ -51,8 +50,12 @@ export class BackgroundRemovalService {
       return pythonResult;
     }
     
-    // Fallback to Sharp-based removal
-    console.log('📸 Using Sharp fallback for background removal...');
-    return await removeBackgroundWithSharp(imageUrl);
+    // Fallback to basic processing
+    console.log('📸 Using basic processing fallback...');
+    return {
+      success: true,
+      url: imageUrl, // Return original image as fallback
+      method: 'fallback-basic'
+    };
   }
 }

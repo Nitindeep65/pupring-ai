@@ -11,9 +11,11 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: '10mb'
     },
-    serverComponentsExternalPackages: ['sharp', 'mongodb'],
     optimizePackageImports: ['@cloudinary/react', 'axios']
   },
+  
+  // External packages for server components
+  serverExternalPackages: ['sharp', 'mongodb'],
 
   // Image optimization for Vercel
   images: {
@@ -38,13 +40,6 @@ const nextConfig = {
     minimumCacheTTL: 60
   },
 
-  // API configuration for large files
-  api: {
-    bodyParser: {
-      sizeLimit: '10mb',
-    },
-    responseLimit: false,
-  },
 
   // Enhanced headers for security and CORS
   async headers() {
@@ -124,11 +119,6 @@ const nextConfig = {
     return config
   },
 
-  // Environment variables
-  env: {
-    VERCEL_ENV: process.env.VERCEL_ENV,
-    NODE_ENV: process.env.NODE_ENV,
-  },
 };
 
 export default nextConfig;
