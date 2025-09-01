@@ -1,0 +1,246 @@
+// Sharp removed to reduce bundle size - using Cloudinary transformations instead
+import { cloudinary, getPublicIdFromUrl, uploadToCloudinary } from './cloudinaryUpload.js';
+
+// Helper function to process image with Cloudinary
+function applyCloudinaryTransformation(publicId, transformations) {
+  return cloudinary.url(publicId, {
+    transformation: transformations,
+    format: 'png',
+    quality: 'auto:best'
+  });
+}
+
+export async function removeBackgroundWithSharp(imageUrl) {
+  try {
+    console.log('🎨 Processing background with Cloudinary (Sharp removed for smaller bundle)...');
+    
+    const publicId = getPublicIdFromUrl(imageUrl);
+    
+    let convertedBuffer;
+    try {
+      // First, convert the image to a supported format (PNG/JPEG)
+      convertedBuffer = await sharp(imageBuffer)
+        .png() // Convert to PNG which supports transparency
+        .toBuffer();
+    } catch (pngError) {
+      try {
+        // If PNG fails, try JPEG
+        convertedBuffer = await sharp(imageBuffer)
+          .jpeg()
+          .toBuffer();
+      } catch (jpegError) {
+        // If both fail, try to just process as-is
+        console.log('⚠️ Format conversion failed, using original buffer');
+        convertedBuffer = imageBuffer;
+      }
+    }
+    
+    // Get image metadata
+    const metadata = await sharp(convertedBuffer).metadata();
+    const { width, height } = metadata;
+    
+    // Method 1: Create a white background version with high contrast
+    const whiteBackground = await sharp(convertedBuffer)
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .toBuffer();
+    
+    // Try complex processing, but fall back to simple white background if it fails
+    let processedImage;
+    try {
+      // Method 2: Extract the subject using edge detection and masking
+      // Convert to grayscale for edge detection
+      const edges = await sharp(convertedBuffer)
+        .grayscale()
+        .normalize() // Enhance contrast
+        .convolve({
+          width: 3,
+          height: 3,
+          kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1] // Edge detection kernel
+        })
+        .threshold(30) // Convert to binary
+        .blur(1.5) // Smooth edges
+        .toBuffer();
+      
+      // Create a mask from edges
+      const mask = await sharp(edges)
+        .negate() // Invert so subject is white
+        .blur(2) // Feather edges
+        .toBuffer();
+      
+      // Apply mask to original image to remove background
+      processedImage = await sharp(convertedBuffer)
+        .ensureAlpha() // Ensure image has alpha channel
+        .composite([
+          {
+            input: await sharp({
+              create: {
+                width,
+                height,
+                channels: 4,
+                background: { r: 255, g: 255, b: 255, alpha: 0 }
+              }
+            }).toBuffer(),
+            blend: 'dest-in'
+          },
+          {
+            input: mask,
+            blend: 'multiply'
+          }
+        ])
+        .flatten({ background: { r: 255, g: 255, b: 255 } }) // White background
+        .toBuffer();
+    } catch (processingError) {
+      console.log('⚠️ Complex processing failed, using simple white background');
+      processedImage = whiteBackground;
+    }
+    
+    // Upload to Cloudinary
+    const uploadResult = await uploadToCloudinary(processedImage, {
+      folder: 'pupring-ai/bg-removed',
+      public_id: `sharp_bg_removed_${Date.now()}`,
+      format: 'png'
+    });
+    
+    if (uploadResult.success) {
+      console.log('✅ Background removed with Sharp');
+      return {
+        success: true,
+        processedUrl: uploadResult.url,
+        originalUrl: imageUrl,
+        method: 'sharp'
+      };
+    }
+    
+    throw new Error('Failed to upload processed image');
+    
+  } catch (error) {
+    console.error('❌ Sharp background removal error:', error);
+    
+    // Fallback: Return image with white background
+    try {
+      const imageBuffer = await downloadImageBuffer(imageUrl);
+      const whiteBackground = await sharp(imageBuffer)
+        .flatten({ background: { r: 255, g: 255, b: 255 } })
+        .toBuffer();
+      
+      const uploadResult = await uploadToCloudinary(whiteBackground, {
+        folder: 'pupring-ai/bg-removed',
+        public_id: `white_bg_${Date.now()}`,
+        format: 'png'
+      });
+      
+      if (uploadResult.success) {
+        return {
+          success: true,
+          processedUrl: uploadResult.url,
+          originalUrl: imageUrl,
+          method: 'white-background',
+          fallback: true
+        };
+      }
+    } catch (fallbackError) {
+      console.error('❌ Fallback failed:', fallbackError);
+    }
+    
+    return {
+      success: false,
+      error: error.message,
+      processedUrl: imageUrl,
+      originalUrl: imageUrl,
+      fallback: true
+    };
+  }
+}
+
+// Advanced background removal using threshold and morphology
+export async function removeBackgroundAdvanced(imageUrl) {
+  try {
+    console.log('🔬 Advanced background removal with Sharp...');
+    
+    const imageBuffer = await downloadImageBuffer(imageUrl);
+    const metadata = await sharp(imageBuffer).metadata();
+    const { width, height } = metadata;
+    
+    // Step 1: Create a mask based on color similarity
+    // Assume corners contain background color
+    const stats = await sharp(imageBuffer).stats();
+    
+    // Step 2: Create multiple masks with different thresholds
+    const masks = [];
+    
+    // Edge-based mask
+    const edgeMask = await sharp(imageBuffer)
+      .grayscale()
+      .convolve({
+        width: 3,
+        height: 3,
+        kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1]
+      })
+      .threshold(50)
+      .blur(2)
+      .toBuffer();
+    masks.push(edgeMask);
+    
+    // Threshold-based mask
+    const thresholdMask = await sharp(imageBuffer)
+      .grayscale()
+      .threshold(128)
+      .toBuffer();
+    masks.push(thresholdMask);
+    
+    // Combine masks
+    let combinedMask = masks[0];
+    for (let i = 1; i < masks.length; i++) {
+      combinedMask = await sharp(combinedMask)
+        .composite([{
+          input: masks[i],
+          blend: 'multiply'
+        }])
+        .toBuffer();
+    }
+    
+    // Clean up mask
+    const cleanMask = await sharp(combinedMask)
+      .median(3) // Remove noise
+      .blur(1) // Smooth edges
+      .toBuffer();
+    
+    // Apply mask to create transparent background
+    const result = await sharp(imageBuffer)
+      .ensureAlpha()
+      .composite([{
+        input: cleanMask,
+        blend: 'dest-in'
+      }])
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .toBuffer();
+    
+    // Upload result
+    const uploadResult = await uploadToCloudinary(result, {
+      folder: 'pupring-ai/bg-removed',
+      public_id: `advanced_bg_removed_${Date.now()}`,
+      format: 'png'
+    });
+    
+    if (uploadResult.success) {
+      console.log('✅ Advanced background removal successful');
+      return {
+        success: true,
+        processedUrl: uploadResult.url,
+        originalUrl: imageUrl,
+        method: 'sharp-advanced'
+      };
+    }
+    
+    throw new Error('Upload failed');
+    
+  } catch (error) {
+    console.error('❌ Advanced removal error:', error);
+    return {
+      success: false,
+      error: error.message,
+      processedUrl: imageUrl,
+      originalUrl: imageUrl
+    };
+  }
+}
